@@ -78,7 +78,7 @@ def _convert_to_gemini_parts(contents: List[Dict[str, Any]]) -> List[types.Part]
 
 
 async def call_gemini_with_retry_async(
-    model_name, contents, config, max_attempts=5, retry_delay=5, error_context=""
+    model_name, contents, config, max_attempts=5, retry_delay=5, error_context="", api_key=""
 ):
     """
     ASYNC: Call Gemini API with asynchronous retry logic.
@@ -93,7 +93,7 @@ async def call_gemini_with_retry_async(
     for attempt in range(max_attempts):
         try:
             # Use global client
-            client = genai.Client(api_key=config.api_key)
+            client = genai.Client(api_key=api_key)
             
             # Convert generic content list to Gemini's format right before the API call
             gemini_contents = _convert_to_gemini_parts(current_contents)

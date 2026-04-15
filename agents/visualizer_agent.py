@@ -153,7 +153,6 @@ class VisualizerAgent(BaseAgent):
                 "temperature": self.exp_config.temperature,
                 "candidate_count": 1,
                 "max_output_tokens": cfg["max_output_tokens"],
-                "api_key": self.exp_config.api_key
             }
             
             if cfg["use_image_generation"] and "gemini" in self.model_name:
@@ -175,6 +174,7 @@ class VisualizerAgent(BaseAgent):
                     config=types.GenerateContentConfig(**gen_config_args),
                     max_attempts=5,
                     retry_delay=30,
+                    api_key=self.api_key,
                 )
             elif "gpt-image" in self.model_name:
                 image_config = {

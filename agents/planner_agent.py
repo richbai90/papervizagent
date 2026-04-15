@@ -138,8 +138,8 @@ class PlannerAgent(BaseAgent):
                 temperature=self.exp_config.temperature,
                 candidate_count=1,
                 max_output_tokens=50000,
-                api_key=self.exp_config.api_key,
             ),
+            api_key=self.exp_config.api_key,
             max_attempts=5,
             retry_delay=5,
         )

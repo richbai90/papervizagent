@@ -88,8 +88,8 @@ class PolishAgent(BaseAgent):
                     temperature=1,
                     candidate_count=1,
                     max_output_tokens=50000,
-                    api_key=self.api_key,
                 ),
+                api_key=self.api_key,
                 max_attempts=3,
                 retry_delay=10,
             )
@@ -176,12 +176,12 @@ class PolishAgent(BaseAgent):
                     candidate_count=1,
                     max_output_tokens=50000,
                     response_modalities=["IMAGE"],
-                    api_key=self.api_key,
                     image_config=types.ImageConfig(
                         aspect_ratio=data.get("additional_info", {}).get("rounded_ratio", "16:9"),
                         image_size="1k",
                     ),
                 ),
+                api_key=self.api_key,
                 max_attempts=5,
                 retry_delay=30,
             )

@@ -88,8 +88,8 @@ class StylistAgent(BaseAgent):
                 temperature=self.exp_config.temperature,
                 candidate_count=1,
                 max_output_tokens=50000,
-                api_key=self.api_key,
             ),
+            api_key=self.api_key,
             max_attempts=5,
             retry_delay=5,
         )
