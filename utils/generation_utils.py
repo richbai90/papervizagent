@@ -16,25 +16,29 @@
 Utility functions for interacting with Gemini and Claude APIs, image processing, and PDF handling.
 """
 
-import json
 import asyncio
 import base64
-from io import BytesIO
-from functools import partial
+import io
+import json
+import os
+import re
 from ast import literal_eval
-from typing import List, Dict, Any
+from functools import partial
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Dict, List
 
 import aiofiles
-from PIL import Image
+import aiohttp
+import google.auth
+import yaml
+from anthropic import AsyncAnthropicVertex
+from datasets import Dataset, load_dataset
 from google import genai
 from google.genai import types
-from anthropic import AsyncAnthropicVertex
 from openai import AsyncOpenAI
-
-import os
-
-import yaml
-from pathlib import Path
+from PIL import Image
+from tqdm import tqdm
 
 # Load config
 config_path = Path(__file__).parent.parent / "configs" / "model_config.yaml"
@@ -49,45 +53,7 @@ def get_config_val(section, key, env_var, default=""):
         val = model_config[section].get(key)
     return val or default
 
-# Initialize clients lazily or with robust defaults
-try:
-    import google.auth
-    creds, _ = google.auth.default()
-    if not hasattr(creds, "service_account_email"):
-        print(f"DEBUG: Running with credentials: {type(creds)}")
-    project_id = get_config_val("google_cloud", "project_id", "GOOGLE_CLOUD_PROJECT", "")
-    location = get_config_val("google_cloud", "location", "GOOGLE_CLOUD_LOCATION", "global")
-    print(f"DEBUG: Initialized Gemini Client with Project: {project_id}, Location: {location}")
-    
-    # Try Vertex AI first (preferred for Cloud Run)
-    gemini_client = genai.Client(vertexai=True, project=project_id, location=location)
-except ValueError:
-    # Fallback to API Key if Vertex fails (e.g. local dev without ADC)
-    api_key = get_config_val("api_keys", "google_api_key", "GOOGLE_API_KEY", "")
-    if api_key:
-        gemini_client = genai.Client(api_key=api_key)
-        print("Initialized Gemini Client with API Key")
-    else:
-        print("Warning: Could not initialize Gemini Client. Missing credentials.")
-        gemini_client = None
-
-anthropic_project_id = get_config_val("anthropic", "project_id", "ANTHROPIC_PROJECT_ID", project_id)
-anthropic_region = get_config_val("anthropic", "region", "ANTHROPIC_REGION", "us-central1")
-try:
-    anthropic_client = AsyncAnthropicVertex(region=anthropic_region, project_id=anthropic_project_id)
-except Exception as e:
-    print(f"Warning: Could not initialize Anthropic Vertex Client: {e}")
-    anthropic_client = None
-
-try:
-    openai_api_key = get_config_val("api_keys", "openai_api_key", "OPENAI_API_KEY", "")
-    if openai_api_key:
-        openai_client = AsyncOpenAI(api_key=openai_api_key)
-    else:
-        openai_client = AsyncOpenAI() # Will try to fall back to ENV implicitly
-except Exception as e:
-    print(f"Warning: Could not initialize OpenAI Client: {e}")
-    openai_client = None
+location = get_config_val("google_cloud", "location", "GOOGLE_CLOUD_LOCATION", "global")
 
 
 
@@ -127,7 +93,7 @@ async def call_gemini_with_retry_async(
     for attempt in range(max_attempts):
         try:
             # Use global client
-            client = gemini_client
+            client = genai.Client(api_key=config.api_key)
             
             # Convert generic content list to Gemini's format right before the API call
             gemini_contents = _convert_to_gemini_parts(current_contents)
@@ -462,3 +428,127 @@ async def call_openai_image_generation_with_retry_async(
                 return ["Error"]
 
     return ["Error"]
+
+def _fetch_stream():
+    stream = load_dataset("mawadalla/scientific-figures-captions-context", split="train", streaming=True)
+    
+    # Wrap the stream in tqdm. It will automatically update on every yield.
+    for item in tqdm(stream, desc="Caching Hugging Face Dataset"):
+        yield item
+
+def hf_dataset():
+    return Dataset.from_generator(_fetch_stream)
+
+
+async def fetch_figshare_figures(query: str, limit: int = 50) -> list:
+    """
+    Searches the Figshare API for figures and retrieves their metadata.
+    Returns a list of dictionaries with 'id', 'caption', and 'context'.
+    """
+    search_url = "https://api.figshare.com/v2/articles/search"
+    search_payload = {
+        "search_for": query,
+        "item_type": 1,  # Figshare item_type 1 corresponds to 'Figure'
+        "limit": limit
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        # Step 1: Execute search query to get the list of relevant articles
+        async with session.post(search_url, json=search_payload) as response:
+            if response.status != 200:
+                print(f"Figshare API search error: HTTP {response.status}")
+                return []
+            search_results = await response.json()
+            
+        # Step 2: Fetch detailed metadata for each article concurrently to extract the description
+        async def fetch_detail(article):
+            detail_url = article.get("url_public_api")
+            if not detail_url:
+                return None
+            async with session.get(detail_url) as res:
+                if res.status == 200:
+                    return await res.json()
+                return None
+                
+        tasks = [fetch_detail(item) for item in search_results]
+        detailed_results = await asyncio.gather(*tasks)
+        
+        # Step 3: Format the responses to match your Candidate Pool structure
+        candidate_pool = []
+        for detail in detailed_results:
+            if detail:
+                # Strip HTML tags from the Figshare description for clean text
+                raw_description = detail.get("description", "")
+                clean_description = re.sub(r'<[^>]+>', '', raw_description) if raw_description else ""
+                
+                candidate_pool.append({
+                    "id": str(detail.get("id")),
+                    "caption": detail.get("title", ""),
+                    "context": clean_description
+                })
+                
+        return candidate_pool
+
+async def fetch_figshare_examples_by_ids(retrieved_ids: list) -> list:
+    """
+    Fetches article metadata and downloads image files from Figshare 
+    for a given list of article IDs.
+    """
+    async def fetch_single_example(session, article_id):
+        try:
+            # 1. Fetch metadata for caption (title) and content (description)
+            article_url = f"https://api.figshare.com/v2/articles/{article_id}"
+            async with session.get(article_url) as res:
+                if res.status != 200:
+                    print(f"Failed to fetch metadata for {article_id}")
+                    return None
+                article_data = await res.json()
+                
+            raw_description = article_data.get("description", "")
+            clean_content = re.sub(r'<[^>]+>', '', raw_description) if raw_description else ""
+            caption = article_data.get("title", "")
+            
+            # 2. Fetch the file list to locate the download URL
+            files_url = f"https://api.figshare.com/v2/articles/{article_id}/files"
+            async with session.get(files_url) as res:
+                if res.status != 200:
+                    print(f"Failed to fetch files for {article_id}")
+                    return None
+                files_data = await res.json()
+                
+            if not files_data:
+                return None
+                
+            # Locate the download URL of the first available file
+            download_url = files_data[0].get("download_url")
+            if not download_url:
+                return None
+                
+            # 3. Download the image bytes
+            async with session.get(download_url) as res:
+                if res.status != 200:
+                    print(f"Failed to download image for {article_id}")
+                    return None
+                image_bytes = await res.read()
+                
+            # 4. Construct the PIL Image object
+            image_obj = Image.open(io.BytesIO(image_bytes))
+            image_obj.load()  # Force loading data into memory
+            
+            return {
+                "content": clean_content,
+                "visual_intent": caption,
+                "image_obj": image_obj
+            }
+            
+        except Exception as e:
+            print(f"Error processing article {article_id}: {e}")
+            return None
+
+    # Execute all fetching tasks concurrently
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_single_example(session, aid) for aid in retrieved_ids]
+        results = await asyncio.gather(*tasks)
+        
+    # Return successful payloads, filtering out any failures
+    return [res for res in results if res is not None]

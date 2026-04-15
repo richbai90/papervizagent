@@ -37,6 +37,7 @@ class ExpConfig:
     model_name: str = ""
     image_model_name: str = ""
     work_dir: Path = Path(__file__).parent.parent
+    api_key: str = ""
 
     timestamp: str | None = None
 

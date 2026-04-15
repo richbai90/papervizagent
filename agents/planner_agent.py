@@ -16,13 +16,18 @@
 Vanilla Agent - Directly rendering images based on the method section.
 """
 
+import asyncio
+import base64
+import io
 import json
-from typing import Dict, Any
+from typing import Any, Dict
+
+from datasets import load_dataset  # Added import
 from google.genai import types
-import base64, io, asyncio
 from PIL import Image
 
 from utils import generation_utils
+
 from .base_agent import BaseAgent
 
 
@@ -49,6 +54,16 @@ class PlannerAgent(BaseAgent):
                 "visual_intent_label": "Diagram Caption",
             }
 
+
+        self._hf_dataset = None
+    
+    @property
+    def hf_dataset(self):
+        if self._hf_dataset is None:
+            self._hf_dataset = generation_utils.hf_dataset()
+        return self._hf_dataset
+
+
     async def process(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Unified processing method that works for both diagram and plot tasks.
@@ -65,12 +80,17 @@ class PlannerAgent(BaseAgent):
         
         # Check if retriever has already provided full examples (e.g., in manual mode)
         examples = data.get("retrieved_examples", [])
+
         if not examples:
             retrieved_ids = data.get("top10_references", [])
-            with open(self.exp_config.work_dir / f"data/PaperBananaBench/{cfg['task_name']}/ref.json", "r", encoding="utf-8") as f:
-                candidate_pool = json.load(f)
-            id_to_item = {item["id"]: item for item in candidate_pool}
-            examples = [id_to_item[ref_id] for ref_id in retrieved_ids if ref_id in id_to_item]
+            ref_file = self.exp_config.work_dir / f"data/PaperBananaBench/{cfg['task_name']}/ref.json"
+            if ref_file.exists():
+                with open(self.exp_config.work_dir / f"data/PaperBananaBench/{cfg['task_name']}/ref.json", "r", encoding="utf-8") as f:
+                    candidate_pool = json.load(f)
+                id_to_item = {item["id"]: item for item in candidate_pool}
+                examples = [id_to_item[ref_id] for ref_id in retrieved_ids if ref_id in id_to_item]
+            else:
+                examples = await generation_utils.fetch_figshare_examples_by_ids(retrieved_ids)            
         
         user_prompt = ""
         for idx, item in enumerate(examples):
@@ -83,11 +103,21 @@ class PlannerAgent(BaseAgent):
             user_prompt += f"{cfg['content_label']}: {item_content}\n"
             user_prompt += f"{cfg['visual_intent_label']}: {item['visual_intent']}\nReference {cfg['task_name'].capitalize()}: "
             content_list.append({"type": "text", "text": user_prompt})
+
+            if "image_obj" in item:
+                # Process Hugging Face PIL Image in-memory
+                pil_image = item["image_obj"]
+                if pil_image.mode != "RGB":
+                    pil_image = pil_image.convert("RGB")
+                buffered = io.BytesIO()
+                pil_image.save(buffered, format="JPEG")
+                ref_image_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
             
-            # Resolve relative path using work_dir
-            image_path = self.exp_config.work_dir / f"data/PaperBananaBench/{cfg['task_name']}" / item["path_to_gt_image"]
-            with open(image_path, "rb") as f:
-                ref_image_base64 = base64.b64encode(f.read()).decode("utf-8")
+            else:
+                # Resolve relative path using work_dir
+                image_path = self.exp_config.work_dir / f"data/PaperBananaBench/{cfg['task_name']}" / item["path_to_gt_image"]
+                with open(image_path, "rb") as f:
+                    ref_image_base64 = base64.b64encode(f.read()).decode("utf-8")
             content_list.append({"type": "image", "image_base64": ref_image_base64})
             user_prompt = ""
 
@@ -108,6 +138,7 @@ class PlannerAgent(BaseAgent):
                 temperature=self.exp_config.temperature,
                 candidate_count=1,
                 max_output_tokens=50000,
+                api_key=self.exp_config.api_key,
             ),
             max_attempts=5,
             retry_delay=5,

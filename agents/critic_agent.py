@@ -16,14 +16,18 @@
 Vanilla Agent - Directly rendering images based on the method section.
 """
 
+import asyncio
+import base64
+import io
 import json
-from typing import Dict, Any
-from google.genai import types
-import base64, io, asyncio
-from PIL import Image
+from typing import Any, Dict
+
 import json_repair
+from google.genai import types
+from PIL import Image
 
 from utils import generation_utils
+
 from .base_agent import BaseAgent
 
 
@@ -33,6 +37,7 @@ class CriticAgent(BaseAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.model_name = self.exp_config.model_name
+        self.api_key=self.exp_config.api_key
 
         # Task-specific configurations
         if self.exp_config.task_name == "plot":
@@ -121,6 +126,7 @@ class CriticAgent(BaseAgent):
                 temperature=self.exp_config.temperature,
                 candidate_count=1,
                 max_output_tokens=50000,
+                api_key=self.api_key,
             ),
             max_attempts=5,
             retry_delay=5,

@@ -18,16 +18,17 @@ Accepts user text input, duplicates it 10 times, and runs parallel processing
 to generate multiple diagram candidates for comparison.
 """
 
-import streamlit as st
 import asyncio
 import base64
 import json
-from io import BytesIO
-from PIL import Image
-from pathlib import Path
-import sys
 import os
+import sys
 from datetime import datetime
+from io import BytesIO
+from pathlib import Path
+
+import streamlit as st
+from PIL import Image
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -36,12 +37,12 @@ print("DEBUG: Importing agents...")
 try:
     from agents.planner_agent import PlannerAgent
     print("DEBUG: Imported PlannerAgent")
-    from agents.visualizer_agent import VisualizerAgent
-    from agents.stylist_agent import StylistAgent
     from agents.critic_agent import CriticAgent
-    from agents.retriever_agent import RetrieverAgent
-    from agents.vanilla_agent import VanillaAgent
     from agents.polish_agent import PolishAgent
+    from agents.retriever_agent import RetrieverAgent
+    from agents.stylist_agent import StylistAgent
+    from agents.vanilla_agent import VanillaAgent
+    from agents.visualizer_agent import VisualizerAgent
     print("DEBUG: Imported all agents")
     from utils import config
     from utils.paperviz_processor import PaperVizProcessor
@@ -121,7 +122,7 @@ def create_sample_inputs(method_content, caption, diagram_type="Pipeline", aspec
     
     return inputs
 
-async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", retrieval_setting="auto", model_name=""):
+async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", retrieval_setting="auto", model_name="", api_key=""):
     """Process multiple candidates in parallel using PaperVizProcessor."""
     # Create experiment config
     exp_config = config.ExpConfig(
@@ -130,6 +131,7 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
         exp_mode=exp_mode,
         retrieval_setting=retrieval_setting,
         model_name=model_name,
+        api_key=api_key,
         work_dir=Path(__file__).parent,
     )
     
@@ -172,7 +174,7 @@ async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9
     try:
         from google import genai
         from google.genai import types
-        
+
         # Initialize client
         project_id = get_config_val("google_cloud", "project_id", "GOOGLE_CLOUD_PROJECT", "")
         location = get_config_val("google_cloud", "location", "GOOGLE_CLOUD_LOCATION", "global")
@@ -395,7 +397,7 @@ def main():
             
             retrieval_setting = st.selectbox(
                 "Retrieval Setting",
-                ["auto", "manual", "random", "none"],
+                ["auto", "none"],
                 index=0,
                 key="tab1_retrieval_setting",
                 help="How to retrieve reference diagrams: auto (automatic selection), manual (use specified references), random (random selection), none (no retrieval)"
@@ -404,8 +406,8 @@ def main():
             num_candidates = st.number_input(
                 "Number of Candidates",
                 min_value=1,
-                max_value=20,
-                value=10,
+                max_value=5,
+                value=3,
                 key="tab1_num_candidates",
                 help="How many parallel candidates to generate"
             )
@@ -426,15 +428,24 @@ def main():
                 help="Maximum number of critic refinement iterations"
             )
             
-            default_model = get_config_val("defaults", "model_name", "MODEL_NAME", "YOUR_MODEL_NAME_HERE")
-            options = ["", default_model] if default_model else ["", "YOUR_MODEL_NAME_HERE"]
+            options = {
+                 "gemini-3.1-flash-lite-preview": "Gemini 3.1 Flash Lite", 
+                 "gemini-3-flash-preview": "Gemini 3.0 Flash",
+                 "gemini-3.1-pro-preview": "Gemini 3.1 Pro",
+            }
             
             model_name = st.selectbox(
                 "Model Name",
-                options,
+                options.keys(),
                 index=0,
                 key="tab1_model_name",
-                help="Model name to use for reasoning"
+                help="Model name to use for reasoning",
+                format_func=lambda k: options[k],
+            )
+
+            model_api_key = st.text_input(
+                "Gemini API Key",
+                key="tab1_gemini_api_key"
             )
         
         st.divider()
@@ -566,7 +577,8 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                             input_data_list, 
                             exp_mode=exp_mode, 
                             retrieval_setting=retrieval_setting,
-                            model_name=model_name
+                            model_name=model_name,
+                            api_key=model_api_key,
                         ))
                         st.session_state["results"] = results
                         st.session_state["exp_mode"] = exp_mode

@@ -16,14 +16,19 @@
 Vanilla Agent - Directly rendering images based on the method section.
 """
 
+import asyncio
+import base64
+import io
+import re
 from concurrent.futures import ProcessPoolExecutor
-from typing import Dict, Any
-from google.genai import types
-import base64, io, asyncio, re
+from typing import Any, Dict
+
 import matplotlib.pyplot as plt
+from google.genai import types
 from PIL import Image
 
 from utils import generation_utils, image_utils
+
 from .base_agent import BaseAgent
 
 
@@ -65,6 +70,7 @@ class VisualizerAgent(BaseAgent):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.api_key = self.exp_config.api_key
         
         # Task-specific configurations
         if "plot" in self.exp_config.task_name:
@@ -147,6 +153,7 @@ class VisualizerAgent(BaseAgent):
                 "temperature": self.exp_config.temperature,
                 "candidate_count": 1,
                 "max_output_tokens": cfg["max_output_tokens"],
+                "api_key": self.exp_config.api_key
             }
             
             if cfg["use_image_generation"] and "gemini" in self.model_name:

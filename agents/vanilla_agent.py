@@ -17,14 +17,18 @@ Vanilla Agent - Directly rendering images based on the method section and diagra
 or writing code to generate plots based on the raw data and plot caption.
 """
 
-from concurrent.futures import ProcessPoolExecutor
-from typing import Dict, Any
-from google.genai import types
-import base64, io, asyncio
-from PIL import Image
+import asyncio
+import base64
+import io
 import json
+from concurrent.futures import ProcessPoolExecutor
+from typing import Any, Dict
+
+from google.genai import types
+from PIL import Image
 
 from utils import generation_utils, image_utils
+
 from .base_agent import BaseAgent
 
 
@@ -35,10 +39,11 @@ def _execute_plot_code_worker(code_text: str) -> str:
     2. Execute plotting
     3. Return JPEG as Base64 string
     """
-    import matplotlib.pyplot as plt
-    import io
     import base64
+    import io
     import re
+
+    import matplotlib.pyplot as plt
 
     match = re.search(r"```python(.*?)```", code_text, re.DOTALL)
     code_clean = match.group(1).strip() if match else code_text.strip()
@@ -72,6 +77,8 @@ class VanillaAgent(BaseAgent):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+        self.api_key = self.exp_config.api_key
         
         if "plot" in self.exp_config.task_name:
             self.model_name = self.exp_config.model_name
@@ -125,6 +132,7 @@ class VanillaAgent(BaseAgent):
             "temperature": self.exp_config.temperature,
             "candidate_count": 1,
             "max_output_tokens": 50000,
+            "api_key": self.exp_config.api_key,
         }
         
         if cfg["use_image_generation"]:
@@ -141,6 +149,7 @@ class VanillaAgent(BaseAgent):
                 config=types.GenerateContentConfig(**gen_config_args),
                 max_attempts=5,
                 retry_delay=30,
+                api_key=self.api_key,
             )
         elif "gpt-image" in self.model_name:
             image_config = {

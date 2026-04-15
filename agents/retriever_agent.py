@@ -16,14 +16,19 @@
 Vanilla Agent - Directly rendering images based on the method section.
 """
 
+import asyncio
+import base64
+import io
 import json
 import random
-from typing import Dict, Any
+from typing import Any, Dict, Optional
+
+from datasets import load_dataset
 from google.genai import types
-import base64, io, asyncio
 from PIL import Image
 
 from utils import generation_utils
+
 from .base_agent import BaseAgent
 
 
@@ -33,6 +38,7 @@ class RetrieverAgent(BaseAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.model_name = self.exp_config.model_name
+        self.api_key = self.exp_config.api_key
         
         # Task-specific configurations
         if self.exp_config.task_name == "plot":
@@ -57,7 +63,15 @@ class RetrieverAgent(BaseAgent):
                 "output_key": "top10_references",
                 "instruction_suffix": "select the Top 10 most relevant diagrams according to the instructions provided. Your output should be a strictly valid JSON object containing a single list of the exact ids of the top 10 selected diagrams.",
             }
+
+        self._hf_dataset = None
     
+    @property
+    def hf_dataset(self):
+        if self._hf_dataset is None:
+            self._hf_dataset = generation_utils.hf_dataset()
+        return self._hf_dataset
+
     async def process(self, data: Dict[str, Any], retrieval_setting: str = "auto") -> Dict[str, Any]:
         """
         Unified processing method for both diagram and plot retrieval.
@@ -89,6 +103,7 @@ class RetrieverAgent(BaseAgent):
         
         if retrieval_setting == "none":
             # No retrieval, return empty list
+            print("retrieval is None")
             data["top10_references"] = []
             data["retrieved_examples"] = []
             
@@ -107,6 +122,11 @@ class RetrieverAgent(BaseAgent):
             # Call model to retrieve and parse results
             data["top10_references"] = await self._retrieve_and_parse(data, cfg)
             data["retrieved_examples"] = []  # Planner will load from ref.json
+
+        elif retrieval_setting == "figshare":
+            # Randomly sample from Hugging Face dataset
+            data["top10_references"] = await self._retrieve_and_parse(data, cfg, figshare=True)
+            data["retrieved_examples"] = []  
         else:
             raise ValueError(f"Unknown retrieval_setting: {retrieval_setting}")
         
@@ -127,29 +147,74 @@ class RetrieverAgent(BaseAgent):
             return [], []
         else:
             raise ValueError(f"Unknown task_name: {cfg['task_name']}")
-    
-    def _load_random_references(self, cfg: dict) -> list:
-        """Randomly sample references from reference pool"""
-        with open(self.exp_config.work_dir / f"data/PaperBananaBench/{cfg['task_name']}/ref.json", "r", encoding="utf-8") as f:
-            candidate_pool = json.load(f)
+
+    async def _generate_search_query(self, visual_intent: str) -> str:
+        """
+        Translates a natural language visual intent into a concise API search query.
+        """
+        system_instruction = "You are a search query extraction tool. Extract the core scientific or structural keywords from the provided figure description. Return ONLY a 2-5 word search query, with no quotes, formatting, or conversational text."
         
-        id_list = [item["id"] for item in candidate_pool]
-        # Randomly select up to 10 examples
+        content_list = [{"type": "text", "text": visual_intent}]
+        
+        response_list = await generation_utils.call_gemini_with_retry_async(
+            model_name=self.model_name,
+            contents=content_list,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.1,  # Low temperature for deterministic keyword extraction
+                candidate_count=1,
+                max_output_tokens=50,
+                api_key=self.api_key,
+            ),
+            max_attempts=3,
+            retry_delay=10,
+        )
+        
+        return response_list[0].strip()
+
+    def _load_random_references(self, cfg: dict, hf: Optional[bool] = False ) -> list:
+        """Randomly sample references from reference pool"""
+        # cfg now serves as a sentinal value to trigger hf logic if it is not there
+        if not hf:
+            with open(self.exp_config.work_dir / f"data/PaperBananaBench/{cfg['task_name']}/ref.json", "r", encoding="utf-8") as f:
+                candidate_pool = json.load(f)
+        
+            id_list = [item["id"] for item in candidate_pool]
+        else:
+            # Efficiently extract just the IDs from the dataset and cast to string
+            candidate_pool = list(self.hf_dataset.shuffle().take(10))
+            id_list = [str(item_id) for item_id in candidate_pool]
+        
         sample_size = min(10, len(id_list))
         return random.sample(id_list, sample_size) if sample_size > 0 else []
     
-    async def _retrieve_and_parse(self, data: Dict[str, Any], cfg: dict) -> list:
+    async def _retrieve_and_parse(self, data: Dict[str, Any], cfg: dict, figshare: Optional[bool] = False) -> list:
         """Call retrieval model and parse results"""
         content = str(data["content"])
         visual_intent = data["visual_intent"]
         
         user_prompt = f"**Target Input**\n- {cfg['target_labels'][0]}: {visual_intent}\n- {cfg['target_labels'][1]}: {content}\n\n**Candidate Pool**\n"
         
-        with open(self.exp_config.work_dir / f"data/PaperBananaBench/{cfg['task_name']}/ref.json", "r", encoding="utf-8") as f:
-            candidate_pool = json.load(f)
+        print(f"[DEBUG] Retrieving Examples")
+        if figshare:
+            query = await self._generate_search_query(visual_intent)
             if cfg["ref_limit"]:
-                candidate_pool = candidate_pool[:cfg["ref_limit"]]
+                max_items = min(cfg["ref_limit"], len(self.hf_dataset))
+                candidate_pool = await generation_utils.fetch_figshare_figures(query, max_items)
+            else:
+                candidate_pool = await generation_utils.fetch_figshare_figures(query, 25)
+
+            if not candidate_pool:
+                print("Warning: No candidates returned from Figshare.")
+                return []
+        else:
+
+            with open(self.exp_config.work_dir / f"data/PaperBananaBench/{cfg['task_name']}/ref.json", "r", encoding="utf-8") as f:
+                candidate_pool = json.load(f)
+                if cfg["ref_limit"]:
+                    candidate_pool = candidate_pool[:cfg["ref_limit"]]
         
+        print(f"[DEBUG] Examples Retrieved. Beginning Processing.")
         for idx, item in enumerate(candidate_pool):
             user_prompt += f"Candidate {cfg['candidate_type']} {idx+1}:\n"
             user_prompt += f"- {cfg['candidate_labels'][0]}: {item['id']}\n"
@@ -167,11 +232,13 @@ class RetrieverAgent(BaseAgent):
                 temperature=self.exp_config.temperature,
                 candidate_count=1,
                 max_output_tokens=50000,
+                api_key=self.api_key,
             ),
             max_attempts=5,
             retry_delay=30,
         )
         
+        print(f"[DEBUG] Processing Complete.")
         # Parse the retrieval result (migrated from get_references.py)
         raw_response = response_list[0].strip()
         return self._parse_retrieval_result(raw_response, cfg["task_name"])

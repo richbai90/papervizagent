@@ -19,11 +19,13 @@ Polish Agent - Applies style guidelines to ground truth images
 import base64
 import io
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
+
 from google.genai import types
 from PIL import Image
 
 from utils import generation_utils, image_utils
+
 from .base_agent import BaseAgent
 
 
@@ -45,6 +47,7 @@ class PolishAgent(BaseAgent):
         super().__init__(**kwargs)
         self.image_model_name = self.exp_config.image_model_name  # e.g., gemini-3-pro-image-preview
         self.text_model_name = self.exp_config.model_name   # e.g., gemini-3-pro-preview
+        self.api_key = self.exp_config.api_key
         
         # Task-specific configurations
         if self.exp_config.task_name == "plot":
@@ -85,6 +88,7 @@ class PolishAgent(BaseAgent):
                     temperature=1,
                     candidate_count=1,
                     max_output_tokens=50000,
+                    api_key=self.api_key,
                 ),
                 max_attempts=3,
                 retry_delay=10,
@@ -172,6 +176,7 @@ class PolishAgent(BaseAgent):
                     candidate_count=1,
                     max_output_tokens=50000,
                     response_modalities=["IMAGE"],
+                    api_key=self.api_key,
                     image_config=types.ImageConfig(
                         aspect_ratio=data.get("additional_info", {}).get("rounded_ratio", "16:9"),
                         image_size="1k",
