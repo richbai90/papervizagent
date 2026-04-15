@@ -17,18 +17,18 @@ Processing pipeline of PaperVizAgent
 """
 
 import asyncio
-from typing import List, Dict, Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Dict, List
 
 import numpy as np
 from tqdm.asyncio import tqdm
 
-from agents.vanilla_agent import VanillaAgent
-from agents.planner_agent import PlannerAgent
-from agents.visualizer_agent import VisualizerAgent
-from agents.stylist_agent import StylistAgent
 from agents.critic_agent import CriticAgent
-from agents.retriever_agent import RetrieverAgent
+from agents.planner_agent import PlannerAgent
 from agents.polish_agent import PolishAgent
+from agents.retriever_agent import RetrieverAgent
+from agents.stylist_agent import StylistAgent
+from agents.vanilla_agent import VanillaAgent
+from agents.visualizer_agent import VisualizerAgent
 
 from .config import ExpConfig
 from .eval_toolkits import get_score_for_image_referenced
@@ -246,7 +246,7 @@ class PaperVizProcessor:
         Evaluation function - uses referenced setting (GT shown first)
         """
         data = await get_score_for_image_referenced(
-            data, task_name=exp_config.task_name, work_dir=exp_config.work_dir
+            data, task_name=exp_config.task_name, work_dir=exp_config.work_dir, model_name=exp_config.model_name
         )
         return data
 

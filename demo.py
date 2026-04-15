@@ -155,7 +155,7 @@ def create_sample_inputs(method_content, caption, diagram_type="Pipeline", aspec
     
     return inputs
 
-async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", retrieval_setting="auto", model_name="", api_key=""):
+async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", retrieval_setting="auto", model_name="", api_key="", image_model_name=""):
     """Process multiple candidates in parallel using PaperVizProcessor."""
     # Create experiment config
     exp_config = config.ExpConfig(
@@ -164,6 +164,7 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
         exp_mode=exp_mode,
         retrieval_setting=retrieval_setting,
         model_name=model_name,
+        image_model_name=image_model_name,
         api_key=api_key,
         work_dir=Path(__file__).parent,
     )
@@ -461,19 +462,36 @@ def main():
                 help="Maximum number of critic refinement iterations"
             )
             
-            options = {
+            model_name_options = {
                  "gemini-3.1-flash-lite-preview": "Gemini 3.1 Flash Lite", 
                  "gemini-3-flash-preview": "Gemini 3.0 Flash",
                  "gemini-3.1-pro-preview": "Gemini 3.1 Pro",
             }
+
+
+            image_model_name_options = {
+                "gemini-3.1-flash-image-preview": "Nano Bannana 2 (Recommended)",
+                "gemini-2.5-flash-image": "Nano Bannana (Fast)",
+                "gemini-3-pro-image-preview": "Nano Bannana Pro (Quality)",
+
+            }
             
             model_name = st.selectbox(
                 "Model Name",
-                options.keys(),
+                model_name_options.keys(),
                 index=0,
                 key="tab1_model_name",
-                help="Model name to use for reasoning",
-                format_func=lambda k: options[k],
+                help="Model to use for reasoning",
+                format_func=lambda k: model_name_options[k],
+            )
+
+            image_model_name = st.selectbox(
+                "Image Model Name",
+                image_model_name_options.keys(),
+                index=0,
+                key="tab1_image_model_name",
+                help="Model to use for image generation",
+                format_func=lambda k: image_model_name_options[k]
             )
 
             model_api_key = st.text_input(
@@ -611,6 +629,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                             exp_mode=exp_mode, 
                             retrieval_setting=retrieval_setting,
                             model_name=model_name,
+                            image_model_name=image_model_name,
                             api_key=model_api_key,
                         ))
                         st.session_state["results"] = results
