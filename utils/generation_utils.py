@@ -107,7 +107,7 @@ async def call_gemini_with_retry_async(
                 or "image" in model_name
             ):
                 raw_response_list = []
-                if not response.candidates or not response.candidates[0][ "content" ][ "parts" ]:
+                if not response.candidates or not response.candidates[0].content.parts:
                     print(
                         f"[Warning]: Failed to generate image, retrying in {retry_delay} seconds..."
                     )
@@ -115,20 +115,20 @@ async def call_gemini_with_retry_async(
                     continue
 
                 # In this mode, we can only have one candidate
-                for part in response.candidates[0][ "content" ][ "parts" ]:
-                    if part[ "inlineData" ]:
+                for part in response.candidates[0].content.parts:
+                    if part.inline_data:
                         # Append base64 encoded image data to raw_response_list
                         raw_response_list.append(
-                            part[ "inlineData" ][ "data" ]
+                            base64.b64encode(part.inline_data.data).decode("utf-8")
                         )
                         break
 
             # Otherwise, for text generation models
             else:
                 raw_response_list = [
-                    part[ "text" ]
+                    part.text
                     for candidate in response.candidates
-                    for part in candidate[ "content" ][ "parts" ]
+                    for part in candidate.content.parts
                 ]
             result_list.extend([r for r in raw_response_list if r.strip() != ""])
             if len(result_list) >= target_candidate_count:
