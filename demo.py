@@ -18,6 +18,34 @@ Accepts user text input, duplicates it 10 times, and runs parallel processing
 to generate multiple diagram candidates for comparison.
 """
 
+import pydantic
+from pydantic import BaseModel
+
+
+def smart_bypassed_init(self, **data):
+    # 1. Manually handle default values (Fixes AttributeErrors)
+    fields = getattr(self, 'model_fields', {})
+    for name, field in fields.items():
+        if name not in data:
+            if field.default is not pydantic.fields.PydanticUndefined:
+                data[name] = field.default
+            elif field.default_factory is not None:
+                data[name] = field.default_factory()
+    
+    # 2. Assign ALL data to __dict__ (This allows your 'api_key' and other extras)
+    self.__dict__.update(data)
+    
+    # 3. Satisfy Pydantic's internal state so .model_dump() etc. still work
+    object.__setattr__(self, '__pydantic_fields_set__', set(data.keys()))
+    object.__setattr__(self, '__pydantic_extra__', {k: v for k, v in data.items() if k not in fields})
+    object.__setattr__(self, '__pydantic_private__', None)
+
+# Apply the patch to the base class
+BaseModel.__init__ = smart_bypassed_init
+
+# --- VERIFY PATCH IS ACTIVE ---
+print("Pydantic Validation Disabled.")
+
 import asyncio
 import base64
 import json
@@ -27,8 +55,13 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
+# NOW import the rest of your app
 import streamlit as st
 from PIL import Image
+
+# ... rest of your imports (e.g., from google import genai)
+
+
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
